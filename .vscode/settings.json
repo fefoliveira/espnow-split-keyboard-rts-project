@@ -1,0 +1,22 @@
+{
+  "git.autoRepositoryDetection": "subFolders",
+  "git.openRepositoryInParentFolders": "never",
+  "git.scanRepositories": [],
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "cmake.enabled": false,
+  "cmake.configureOnOpen": false,
+  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "idf.openOcdConfigs": ["board/esp32-wroom-32.cfg"],
+  "idf.port": "/dev/ttyUSB0",
+  "idf.currentSetup": "/home/fernando/esp/v5.5-rc1/esp-idf",
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32"
+  },
+  "clangd.path": "/home/fernando/.espressif/tools/esp-clang/esp-19.1.2_20250312/esp-clang/bin/clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=/home/fernando/uergs/real-time-systems/real-time-systems-esp-idf/build"
+  ],
+  "idf.flashType": "UART"
+}

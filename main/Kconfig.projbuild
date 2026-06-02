@@ -1,0 +1,16 @@
+menu "Keyboard Configuration"
+
+    choice KEYBOARD_TARGET_DEVICE
+        prompt "Target Device"
+        default KEYBOARD_HALF_LEFT
+        help
+            Select which split-keyboard half this firmware image targets.
+
+        config KEYBOARD_HALF_LEFT
+            bool "Left Half (ESP1)"
+
+        config KEYBOARD_HALF_RIGHT
+            bool "Right Half (ESP2)"
+    endchoice
+
+endmenu

@@ -1,6 +1,7 @@
 #include "left_node.h"
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_err.h"
@@ -17,7 +18,8 @@ static const char *TAG = "LEFT_NODE";
 typedef struct {
     uint32_t counter;
     uint64_t uptime_ms;
-} ping_message_t;
+    char text[64];
+} espnow_message_t;
 
 static const uint8_t BROADCAST_MAC[ESP_NOW_ETH_ALEN] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
@@ -75,10 +77,15 @@ static void left_ping_task(void *arg)
     (void)arg;
 
     while (1) {
-        ping_message_t message = {
-            .counter = counter++,
+        espnow_message_t message = {
+            .counter = counter,
             .uptime_ms = (uint64_t)(esp_timer_get_time() / 1000)
         };
+
+        snprintf(message.text, sizeof(message.text), "Mensagem ESP-NOW #%" PRIu32, counter);
+        counter++;
+
+        ESP_LOGI(TAG, "Sending message: \"%s\"", message.text);
 
         esp_err_t err = esp_now_send(
             BROADCAST_MAC,
@@ -91,9 +98,10 @@ static void left_ping_task(void *arg)
         } else {
             ESP_LOGI(
                 TAG,
-                "Ping sent: counter=%" PRIu32 ", uptime_ms=%" PRIu64,
+                "Message sent: counter=%" PRIu32 ", uptime_ms=%" PRIu64 ", text=\"%s\"",
                 message.counter,
-                message.uptime_ms
+                message.uptime_ms,
+                message.text
             );
         }
 

@@ -23,7 +23,8 @@ static QueueHandle_t s_led_event_queue;
 typedef struct {
     uint32_t counter;
     uint64_t uptime_ms;
-} ping_message_t;
+    char text[64];
+} espnow_message_t;
 
 static void onboard_led_init(void)
 {
@@ -80,15 +81,18 @@ static void wifi_init_sta_for_espnow(void)
 
 static void log_received_payload(const uint8_t *data, int len)
 {
-    if (len == (int)sizeof(ping_message_t)) {
-        ping_message_t message;
+    if (len == (int)sizeof(espnow_message_t)) {
+        espnow_message_t message;
 
         memcpy(&message, data, sizeof(message));
+        message.text[sizeof(message.text) - 1] = '\0';
+
         ESP_LOGI(
             TAG,
-            "Ping payload: counter=%" PRIu32 ", uptime_ms=%" PRIu64,
+            "Message payload: counter=%" PRIu32 ", uptime_ms=%" PRIu64 ", text=\"%s\"",
             message.counter,
-            message.uptime_ms
+            message.uptime_ms,
+            message.text
         );
         return;
     }

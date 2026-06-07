@@ -29,8 +29,10 @@ build/
 *.elf
 *.map
 flasher_args.json # Generated in build directory
+build-esp*/
 sdkconfig.old
 sdkconfig
+sdkconfig.esp*
 
 # ESP-IDF dependencies
 # For older versions or manual component management

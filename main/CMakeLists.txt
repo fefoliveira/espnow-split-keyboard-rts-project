@@ -14,5 +14,5 @@ idf_component_register(
 		esp_timer
 		esp_wifi  # esp_now API is provided by esp_wifi in ESP-IDF
 		nvs_flash
+		shared_protocol
 )
-

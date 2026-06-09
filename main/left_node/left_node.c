@@ -1,28 +1,41 @@
 #include "left_node.h"
 
-#include <inttypes.h>
-#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
+#include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_now.h"
-#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "protocol.h"
 
 static const char *TAG = "LEFT_NODE";
 
+#define LEFT_KEY_A_GPIO GPIO_NUM_25
+#define LEFT_KEY_B_GPIO GPIO_NUM_26
+#define BUTTON_SCAN_PERIOD_MS 1
+#define BUTTON_DEBOUNCE_MS 5
+
 typedef struct {
-    uint32_t counter;
-    uint64_t uptime_ms;
-    char text[64];
-} espnow_message_t;
+    gpio_num_t gpio;
+    keyboard_key_id_t key_id;
+    bool stable_pressed;
+    bool candidate_pressed;
+    uint8_t candidate_samples;
+} button_state_t;
 
 static const uint8_t BROADCAST_MAC[ESP_NOW_ETH_ALEN] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+};
+
+static button_state_t s_buttons[] = {
+    {.gpio = LEFT_KEY_A_GPIO, .key_id = KEY_A},
+    {.gpio = LEFT_KEY_B_GPIO, .key_id = KEY_B},
 };
 
 static void wifi_init_sta_for_espnow(void)
@@ -36,76 +49,105 @@ static void wifi_init_sta_for_espnow(void)
     ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
 }
 
+static void buttons_init(void)
+{
+    gpio_config_t io_config = {
+        .pin_bit_mask = (1ULL << LEFT_KEY_A_GPIO) | (1ULL << LEFT_KEY_B_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    ESP_ERROR_CHECK(gpio_config(&io_config));
+
+    for (size_t i = 0; i < sizeof(s_buttons) / sizeof(s_buttons[0]); i++) {
+        bool is_pressed = gpio_get_level(s_buttons[i].gpio) == 0;
+
+        s_buttons[i].stable_pressed = is_pressed;
+        s_buttons[i].candidate_pressed = is_pressed;
+        s_buttons[i].candidate_samples = 0;
+    }
+}
+
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
 static void espnow_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_status_t status)
 {
-    const uint8_t *mac_addr = tx_info != NULL ? tx_info->des_addr : NULL;
+    const uint8_t *destination = tx_info != NULL ? tx_info->des_addr : NULL;
 
-    if (mac_addr == NULL) {
-        ESP_LOGE(TAG, "Send callback with NULL destination MAC");
+    if (destination == NULL) {
+        ESP_LOGE(TAG, "Send callback received no destination");
         return;
     }
 
-    ESP_LOGI(
-        TAG,
-        "Send status to %02X:%02X:%02X:%02X:%02X:%02X = %s",
-        mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5],
-        status == ESP_NOW_SEND_SUCCESS ? "SUCCESS" : "FAIL"
-    );
+    if (status != ESP_NOW_SEND_SUCCESS) {
+        ESP_LOGW(TAG, "ESP-NOW delivery failed");
+    }
 }
 #else
-static void espnow_send_cb(const uint8_t *mac_addr, esp_now_send_status_t status)
+static void espnow_send_cb(const uint8_t *destination, esp_now_send_status_t status)
 {
-    if (mac_addr == NULL) {
-        ESP_LOGE(TAG, "Send callback with NULL MAC");
+    if (destination == NULL) {
+        ESP_LOGE(TAG, "Send callback received no destination");
         return;
     }
 
-    ESP_LOGI(
-        TAG,
-        "Send status to %02X:%02X:%02X:%02X:%02X:%02X = %s",
-        mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5],
-        status == ESP_NOW_SEND_SUCCESS ? "SUCCESS" : "FAIL"
-    );
+    if (status != ESP_NOW_SEND_SUCCESS) {
+        ESP_LOGW(TAG, "ESP-NOW delivery failed");
+    }
 }
 #endif
 
-static void left_ping_task(void *arg)
+static void send_key_event(const button_state_t *button)
 {
-    uint32_t counter = 0;
+    key_event_t event = {
+        .key_id = button->key_id,
+        .is_pressed = button->stable_pressed,
+    };
+
+    ESP_ERROR_CHECK(
+        esp_now_send(
+            BROADCAST_MAC,
+            (const uint8_t *)&event,
+            sizeof(event)
+        )
+    );
+}
+
+static void scan_button(button_state_t *button)
+{
+    bool sampled_pressed = gpio_get_level(button->gpio) == 0;
+
+    if (sampled_pressed != button->candidate_pressed) {
+        button->candidate_pressed = sampled_pressed;
+        button->candidate_samples = 1;
+        return;
+    }
+
+    if (button->candidate_samples < BUTTON_DEBOUNCE_MS) {
+        button->candidate_samples++;
+    }
+
+    if (button->candidate_samples >= BUTTON_DEBOUNCE_MS &&
+        button->stable_pressed != button->candidate_pressed) {
+        button->stable_pressed = button->candidate_pressed;
+        send_key_event(button);
+    }
+}
+
+static void left_button_scan_task(void *arg)
+{
+    TickType_t last_wake_time = xTaskGetTickCount();
+    const TickType_t scan_period = pdMS_TO_TICKS(BUTTON_SCAN_PERIOD_MS);
 
     (void)arg;
 
-    while (1) {
-        espnow_message_t message = {
-            .counter = counter,
-            .uptime_ms = (uint64_t)(esp_timer_get_time() / 1000)
-        };
-
-        snprintf(message.text, sizeof(message.text), "Mensagem ESP-NOW #%" PRIu32, counter);
-        counter++;
-
-        ESP_LOGI(TAG, "Sending message: \"%s\"", message.text);
-
-        esp_err_t err = esp_now_send(
-            BROADCAST_MAC,
-            (const uint8_t *)&message,
-            sizeof(message)
-        );
-
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "esp_now_send failed: %s", esp_err_to_name(err));
-        } else {
-            ESP_LOGI(
-                TAG,
-                "Message sent: counter=%" PRIu32 ", uptime_ms=%" PRIu64 ", text=\"%s\"",
-                message.counter,
-                message.uptime_ms,
-                message.text
-            );
+    while (true) {
+        for (size_t i = 0; i < sizeof(s_buttons) / sizeof(s_buttons[0]); i++) {
+            scan_button(&s_buttons[i]);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        xTaskDelayUntil(&last_wake_time, scan_period);
     }
 }
 
@@ -114,9 +156,15 @@ void left_node_start(void)
     esp_now_peer_info_t peer = {0};
     esp_err_t err;
 
-    ESP_LOGI(TAG, "Starting LEFT half (ESP-NOW transmitter)");
+    ESP_LOGI(
+        TAG,
+        "Starting LEFT scanner: KEY_A=GPIO%d, KEY_B=GPIO%d, polling=1000 Hz",
+        LEFT_KEY_A_GPIO,
+        LEFT_KEY_B_GPIO
+    );
 
     wifi_init_sta_for_espnow();
+    buttons_init();
 
     ESP_ERROR_CHECK(esp_now_init());
     ESP_ERROR_CHECK(esp_now_register_send_cb(espnow_send_cb));
@@ -128,13 +176,19 @@ void left_node_start(void)
 
     err = esp_now_add_peer(&peer);
     if (err != ESP_OK && err != ESP_ERR_ESPNOW_EXIST) {
-        ESP_LOGE(TAG, "esp_now_add_peer failed: %s", esp_err_to_name(err));
         ESP_ERROR_CHECK(err);
     }
 
     ESP_ERROR_CHECK(
-        xTaskCreate(left_ping_task, "left_ping_task", 4096, NULL, 5, NULL) == pdPASS
+        xTaskCreate(
+            left_button_scan_task,
+            "left_button_scan_task",
+            4096,
+            NULL,
+            configMAX_PRIORITIES - 1,
+            NULL
+        ) == pdPASS
             ? ESP_OK
-            : ESP_FAIL
+            : ESP_ERR_NO_MEM
     );
 }

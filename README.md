@@ -24,6 +24,7 @@ etapas de experimentacao e desenvolvimento:
 | `main` | Disponibilizar a base do projeto ESP-IDF e validar builds independentes para as duas placas dentro do mesmo repositorio. |
 | `feature/esp-now` | Experimentar e validar a comunicacao ESP-NOW entre os dois ESP32 com mensagens periodicas. |
 | `feature/left-node` | Ler os primeiros botoes do no esquerdo e enviar eventos reais de pressionamento e soltura ao no direito. |
+| `feature/right-node` | Integrar as setas locais, uma fila FIFO central e o espelho consolidado das seis teclas no no direito. |
 
 Para acessar uma etapa especifica, utilize:
 
@@ -80,13 +81,62 @@ O evento informa qual tecla mudou e se ela foi pressionada ou solta. Os
 identificadores `KEY_A` e `KEY_B` usam os valores correspondentes aos codigos
 de teclado USB HID, preparando o protocolo para etapas posteriores.
 
-O ESP2 atua como no direito e receptor. Ele valida o tamanho do pacote,
-interpreta o evento compartilhado e registra no monitor serial o identificador,
-o nome e o novo estado da tecla.
+O ESP2 atua como no direito e centralizador. Alem de receber os eventos remotos
+de A e B, ele monitora quatro botoes locais correspondentes as setas. Eventos
+remotos e locais sao inseridos em uma unica fila FIFO do FreeRTOS.
 
 As duas placas utilizam Wi-Fi no modo Station e canal 1. O envio continua sendo
 feito para o endereco broadcast `FF:FF:FF:FF:FF:FF`, sem criptografia ou
 pareamento unicast.
+
+## 4. Fase 2: fila central e estado consolidado
+
+O no direito mantem um espelho global do estado atual das seis teclas:
+
+```c
+typedef struct {
+    bool key_a;
+    bool key_b;
+    bool arrow_up;
+    bool arrow_down;
+    bool arrow_left;
+    bool arrow_right;
+} keyboard_state_t;
+```
+
+Uma fila FreeRTOS com capacidade para 32 instancias de `key_event_t` funciona
+como arbitro cronologico. O callback ESP-NOW publica nela os eventos remotos e
+a tarefa `right_local_scan_task` publica os eventos das quatro setas locais.
+
+Somente a tarefa `keyboard_consolidation_task` altera o espelho global. Ela
+permanece bloqueada em `xQueueReceive(..., portMAX_DELAY)` quando a fila esta
+vazia, consome os eventos na ordem FIFO e imprime a foto completa do teclado.
+Como existe apenas um escritor do espelho, nao e necessario mutex nesta fase.
+
+O callback ESP-NOW executa no contexto da tarefa Wi-Fi de alta prioridade do
+ESP-IDF, nao em uma ISR de hardware. Por isso, a publicacao correta e
+`xQueueSend(..., 0)`, sem bloqueio. A API `xQueueSendFromISR` fica reservada
+para interrupcoes reais.
+
+As prioridades utilizadas no no direito sao:
+
+| Rotina | Prioridade |
+| --- | --- |
+| Callback ESP-NOW | Contexto interno da tarefa Wi-Fi do ESP-IDF |
+| `right_local_scan_task` | `configMAX_PRIORITIES - 2` |
+| `keyboard_consolidation_task` | 3 |
+
+O scanner local usa `xTaskDelayUntil()` com periodo de 1 ms e debounce de 5
+amostras consecutivas, igual ao no esquerdo.
+
+O mapeamento fisico do no direito e:
+
+| Tecla | GPIO |
+| --- | --- |
+| Seta para cima | GPIO27 |
+| Seta para baixo | GPIO33 |
+| Seta para esquerda | GPIO25 |
+| Seta para direita | GPIO26 |
 
 ### Estrutura do projeto
 
@@ -130,7 +180,7 @@ mesma definicao de teclas e o mesmo formato de pacote. O `Makefile`, por sua
 vez, mantem configuracoes e builds separados para os dois firmwares dentro do
 mesmo repositorio.
 
-## 4. Como executar esta branch
+## 5. Como executar esta branch
 
 Por padrao, o `Makefile` considera:
 
@@ -153,6 +203,11 @@ Com as placas desligadas, conecte:
 ```text
 ESP1 GPIO25 --- botao A --- GND
 ESP1 GPIO26 --- botao B --- GND
+
+ESP2 GPIO27 --- botao seta para cima --- GND
+ESP2 GPIO33 --- botao seta para baixo --- GND
+ESP2 GPIO25 --- botao seta para esquerda --- GND
+ESP2 GPIO26 --- botao seta para direita --- GND
 ```
 
 Nao e necessario adicionar resistores externos para este teste, pois o firmware
@@ -198,26 +253,33 @@ Ao iniciar o ESP2, a saida esperada inclui:
 
 ```text
 I (...) APP_MAIN: Configured as RIGHT half
-I (...) RIGHT_NODE: Starting RIGHT half (ESP-NOW key event receiver)
-I (...) RIGHT_NODE: Receiver ready. Waiting for key events...
+I (...) RIGHT_NODE: Starting RIGHT half: UP=GPIO27 DOWN=GPIO33 LEFT=GPIO25 RIGHT=GPIO26
+I (...) RIGHT_NODE: Central key-event queue ready
 I (...) main_task: Returned from app_main()
 ```
 
-O ESP2 continua ativo por meio do callback de recepcao do ESP-NOW mesmo depois
-do retorno de `app_main()`.
+O ESP2 continua ativo por meio do callback ESP-NOW e das tarefas
+`right_local_scan_task` e `keyboard_consolidation_task` mesmo depois do retorno
+de `app_main()`.
 
 Ao pressionar e soltar o botao A, o monitor do ESP2 deve exibir:
 
 ```text
-I (...) RIGHT_NODE: Key event: id=0x04 (KEY_A), state=PRESSED
-I (...) RIGHT_NODE: Key event: id=0x04 (KEY_A), state=RELEASED
+I (...) RIGHT_NODE: Keyboard state: A=1 B=0 UP=0 DOWN=0 LEFT=0 RIGHT=0
+I (...) RIGHT_NODE: Keyboard state: A=0 B=0 UP=0 DOWN=0 LEFT=0 RIGHT=0
 ```
 
 Para o botao B, a saida esperada e:
 
 ```text
-I (...) RIGHT_NODE: Key event: id=0x05 (KEY_B), state=PRESSED
-I (...) RIGHT_NODE: Key event: id=0x05 (KEY_B), state=RELEASED
+I (...) RIGHT_NODE: Keyboard state: A=0 B=1 UP=0 DOWN=0 LEFT=0 RIGHT=0
+I (...) RIGHT_NODE: Keyboard state: A=0 B=0 UP=0 DOWN=0 LEFT=0 RIGHT=0
+```
+
+Ao pressionar a seta para cima no ESP2:
+
+```text
+I (...) RIGHT_NODE: Keyboard state: A=0 B=0 UP=1 DOWN=0 LEFT=0 RIGHT=0
 ```
 
 Se as portas seriais forem diferentes das configuracoes padrao:
@@ -241,6 +303,6 @@ make esp2-flash
 make esp2-monitor
 ```
 
-Nesta etapa, o teste e considerado bem-sucedido quando cada pressionamento e
-soltura dos botoes A e B gera exatamente um evento correspondente no monitor
-serial do ESP2.
+Nesta etapa, o teste e considerado bem-sucedido quando eventos remotos e locais
+atualizam corretamente a foto consolidada das seis teclas, respeitando a ordem
+FIFO da fila central.

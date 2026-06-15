@@ -1,10 +1,9 @@
 #include "left_node.h"
 
 #include <stdbool.h>
-#include <stdint.h>
 #include <string.h>
 
-#include "driver/gpio.h"
+#include "button_debounce.h"
 #include "esp_err.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
@@ -21,19 +20,11 @@ static const char *TAG = "LEFT_NODE";
 #define BUTTON_SCAN_PERIOD_MS 1
 #define BUTTON_DEBOUNCE_MS 5
 
-typedef struct {
-    gpio_num_t gpio;
-    keyboard_key_id_t key_id;
-    bool stable_pressed;
-    bool candidate_pressed;
-    uint8_t candidate_samples;
-} button_state_t;
-
 static const uint8_t BROADCAST_MAC[ESP_NOW_ETH_ALEN] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
 };
 
-static button_state_t s_buttons[] = {
+static debounced_button_t s_buttons[] = {
     {.gpio = LEFT_KEY_A_GPIO, .key_id = KEY_A},
     {.gpio = LEFT_KEY_B_GPIO, .key_id = KEY_B},
 };
@@ -47,27 +38,6 @@ static void wifi_init_sta_for_espnow(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
-}
-
-static void buttons_init(void)
-{
-    gpio_config_t io_config = {
-        .pin_bit_mask = (1ULL << LEFT_KEY_A_GPIO) | (1ULL << LEFT_KEY_B_GPIO),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-
-    ESP_ERROR_CHECK(gpio_config(&io_config));
-
-    for (size_t i = 0; i < sizeof(s_buttons) / sizeof(s_buttons[0]); i++) {
-        bool is_pressed = gpio_get_level(s_buttons[i].gpio) == 0;
-
-        s_buttons[i].stable_pressed = is_pressed;
-        s_buttons[i].candidate_pressed = is_pressed;
-        s_buttons[i].candidate_samples = 0;
-    }
 }
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
@@ -98,41 +68,15 @@ static void espnow_send_cb(const uint8_t *destination, esp_now_send_status_t sta
 }
 #endif
 
-static void send_key_event(const button_state_t *button)
+static void send_key_event(const key_event_t *event)
 {
-    key_event_t event = {
-        .key_id = button->key_id,
-        .is_pressed = button->stable_pressed,
-    };
-
     ESP_ERROR_CHECK(
         esp_now_send(
             BROADCAST_MAC,
-            (const uint8_t *)&event,
-            sizeof(event)
+            (const uint8_t *)event,
+            sizeof(*event)
         )
     );
-}
-
-static void scan_button(button_state_t *button)
-{
-    bool sampled_pressed = gpio_get_level(button->gpio) == 0;
-
-    if (sampled_pressed != button->candidate_pressed) {
-        button->candidate_pressed = sampled_pressed;
-        button->candidate_samples = 1;
-        return;
-    }
-
-    if (button->candidate_samples < BUTTON_DEBOUNCE_MS) {
-        button->candidate_samples++;
-    }
-
-    if (button->candidate_samples >= BUTTON_DEBOUNCE_MS &&
-        button->stable_pressed != button->candidate_pressed) {
-        button->stable_pressed = button->candidate_pressed;
-        send_key_event(button);
-    }
 }
 
 static void left_button_scan_task(void *arg)
@@ -144,7 +88,15 @@ static void left_button_scan_task(void *arg)
 
     while (true) {
         for (size_t i = 0; i < sizeof(s_buttons) / sizeof(s_buttons[0]); i++) {
-            scan_button(&s_buttons[i]);
+            key_event_t event;
+
+            if (button_debounce_sample(
+                    &s_buttons[i],
+                    BUTTON_DEBOUNCE_MS,
+                    &event
+                )) {
+                send_key_event(&event);
+            }
         }
 
         xTaskDelayUntil(&last_wake_time, scan_period);
@@ -164,7 +116,12 @@ void left_node_start(void)
     );
 
     wifi_init_sta_for_espnow();
-    buttons_init();
+    ESP_ERROR_CHECK(
+        button_debounce_init(
+            s_buttons,
+            sizeof(s_buttons) / sizeof(s_buttons[0])
+        )
+    );
 
     ESP_ERROR_CHECK(esp_now_init());
     ESP_ERROR_CHECK(esp_now_register_send_cb(espnow_send_cb));

@@ -8,6 +8,7 @@ idf_component_register(
 		"left_node"
 		"right_node"
 	REQUIRES
+		button_debounce
 		esp_driver_gpio
 		esp_event
 		esp_netif

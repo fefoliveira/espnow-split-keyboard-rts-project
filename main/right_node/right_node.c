@@ -1,10 +1,9 @@
 #include "right_node.h"
 
 #include <stdbool.h>
-#include <stdint.h>
 #include <string.h>
 
-#include "driver/gpio.h"
+#include "button_debounce.h"
 #include "esp_err.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
@@ -36,18 +35,10 @@ typedef struct {
     bool arrow_right;
 } keyboard_state_t;
 
-typedef struct {
-    gpio_num_t gpio;
-    keyboard_key_id_t key_id;
-    bool stable_pressed;
-    bool candidate_pressed;
-    uint8_t candidate_samples;
-} button_state_t;
-
 static keyboard_state_t s_keyboard_state = {0};
 static QueueHandle_t s_key_event_queue;
 
-static button_state_t s_local_buttons[] = {
+static debounced_button_t s_local_buttons[] = {
     {.gpio = RIGHT_ARROW_UP_GPIO, .key_id = KEY_ARROW_UP},
     {.gpio = RIGHT_ARROW_DOWN_GPIO, .key_id = KEY_ARROW_DOWN},
     {.gpio = RIGHT_ARROW_LEFT_GPIO, .key_id = KEY_ARROW_LEFT},
@@ -63,31 +54,6 @@ static void wifi_init_sta_for_espnow(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
-}
-
-static void local_buttons_init(void)
-{
-    gpio_config_t io_config = {
-        .pin_bit_mask =
-            (1ULL << RIGHT_ARROW_UP_GPIO) |
-            (1ULL << RIGHT_ARROW_DOWN_GPIO) |
-            (1ULL << RIGHT_ARROW_LEFT_GPIO) |
-            (1ULL << RIGHT_ARROW_RIGHT_GPIO),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-
-    ESP_ERROR_CHECK(gpio_config(&io_config));
-
-    for (size_t i = 0; i < sizeof(s_local_buttons) / sizeof(s_local_buttons[0]); i++) {
-        bool is_pressed = gpio_get_level(s_local_buttons[i].gpio) == 0;
-
-        s_local_buttons[i].stable_pressed = is_pressed;
-        s_local_buttons[i].candidate_pressed = is_pressed;
-        s_local_buttons[i].candidate_samples = 0;
-    }
 }
 
 static bool is_valid_key_id(keyboard_key_id_t key_id)
@@ -149,36 +115,10 @@ static void espnow_recv_cb(
 }
 #endif
 
-static void enqueue_local_event(const button_state_t *button)
+static void enqueue_local_event(const key_event_t *event)
 {
-    key_event_t event = {
-        .key_id = button->key_id,
-        .is_pressed = button->stable_pressed,
-    };
-
-    if (xQueueSend(s_key_event_queue, &event, 0) != pdPASS) {
+    if (xQueueSend(s_key_event_queue, event, 0) != pdPASS) {
         ESP_LOGW(TAG, "Key event queue full; local event dropped");
-    }
-}
-
-static void scan_local_button(button_state_t *button)
-{
-    bool sampled_pressed = gpio_get_level(button->gpio) == 0;
-
-    if (sampled_pressed != button->candidate_pressed) {
-        button->candidate_pressed = sampled_pressed;
-        button->candidate_samples = 1;
-        return;
-    }
-
-    if (button->candidate_samples < BUTTON_DEBOUNCE_MS) {
-        button->candidate_samples++;
-    }
-
-    if (button->candidate_samples >= BUTTON_DEBOUNCE_MS &&
-        button->stable_pressed != button->candidate_pressed) {
-        button->stable_pressed = button->candidate_pressed;
-        enqueue_local_event(button);
     }
 }
 
@@ -191,7 +131,15 @@ static void right_local_scan_task(void *arg)
 
     while (true) {
         for (size_t i = 0; i < sizeof(s_local_buttons) / sizeof(s_local_buttons[0]); i++) {
-            scan_local_button(&s_local_buttons[i]);
+            key_event_t event;
+
+            if (button_debounce_sample(
+                    &s_local_buttons[i],
+                    BUTTON_DEBOUNCE_MS,
+                    &event
+                )) {
+                enqueue_local_event(&event);
+            }
         }
 
         xTaskDelayUntil(&last_wake_time, scan_period);
@@ -266,7 +214,12 @@ void right_node_start(void)
     s_key_event_queue = xQueueCreate(KEY_EVENT_QUEUE_LENGTH, sizeof(key_event_t));
     ESP_ERROR_CHECK(s_key_event_queue != NULL ? ESP_OK : ESP_ERR_NO_MEM);
 
-    local_buttons_init();
+    ESP_ERROR_CHECK(
+        button_debounce_init(
+            s_local_buttons,
+            sizeof(s_local_buttons) / sizeof(s_local_buttons[0])
+        )
+    );
     wifi_init_sta_for_espnow();
 
     ESP_ERROR_CHECK(

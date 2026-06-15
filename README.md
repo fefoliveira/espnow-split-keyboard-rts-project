@@ -91,6 +91,18 @@ pareamento unicast.
 
 ## 4. Fase 2: fila central e estado consolidado
 
+### Debounce compartilhado
+
+A leitura e o debounce dos botoes dos dois nos ficam centralizados no
+componente `components/button_debounce`. O componente configura entradas
+ativas em nivel baixo com pull-up interno e mantem, para cada botao, o estado
+estavel, o estado candidato e a quantidade de amostras consecutivas.
+
+Os nos chamam `button_debounce_sample()` a cada 1 ms. A funcao somente produz
+um `key_event_t` depois de cinco amostras iguais e quando o estado validado
+realmente mudou. O no esquerdo envia esse evento por ESP-NOW; o no direito o
+insere na fila central.
+
 O no direito mantem um espelho global do estado atual das seis teclas:
 
 ```c

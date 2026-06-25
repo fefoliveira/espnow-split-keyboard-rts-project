@@ -145,9 +145,9 @@ O mapeamento fisico do no direito e:
 
 | Tecla | GPIO |
 | --- | --- |
-| Seta para cima | GPIO27 |
+| Seta para cima | GPIO25 |
 | Seta para baixo | GPIO33 |
-| Seta para esquerda | GPIO25 |
+| Seta para esquerda | GPIO27 |
 | Seta para direita | GPIO26 |
 
 ### Estrutura do projeto
@@ -216,9 +216,9 @@ Com as placas desligadas, conecte:
 ESP1 GPIO25 --- botao A --- GND
 ESP1 GPIO26 --- botao B --- GND
 
-ESP2 GPIO27 --- botao seta para cima --- GND
+ESP2 GPIO25 --- botao seta para cima --- GND
 ESP2 GPIO33 --- botao seta para baixo --- GND
-ESP2 GPIO25 --- botao seta para esquerda --- GND
+ESP2 GPIO27 --- botao seta para esquerda --- GND
 ESP2 GPIO26 --- botao seta para direita --- GND
 ```
 
@@ -265,7 +265,7 @@ Ao iniciar o ESP2, a saida esperada inclui:
 
 ```text
 I (...) APP_MAIN: Configured as RIGHT half
-I (...) RIGHT_NODE: Starting RIGHT half: UP=GPIO27 DOWN=GPIO33 LEFT=GPIO25 RIGHT=GPIO26
+I (...) RIGHT_NODE: Starting RIGHT half: UP=GPIO25 DOWN=GPIO33 LEFT=GPIO27 RIGHT=GPIO26
 I (...) RIGHT_NODE: Central key-event queue ready
 I (...) main_task: Returned from app_main()
 ```
@@ -318,3 +318,88 @@ make esp2-monitor
 Nesta etapa, o teste e considerado bem-sucedido quando eventos remotos e locais
 atualizam corretamente a foto consolidada das seis teclas, respeitando a ordem
 FIFO da fila central.
+
+## 6. Ponte HID para Linux
+
+Nesta etapa, o computador Linux pode receber as teclas consolidadas pela ESP2
+por meio de uma ponte em Python:
+
+```text
+ESP1 botoes A/B
+    -> ESP-NOW
+ESP2 right_node
+    -> serial USB com "Keyboard state: ..."
+Python no Linux
+    -> uinput
+Aplicacoes do Linux
+```
+
+Essa ponte ainda nao e BLE HID rodando dentro da ESP32. Ela usa a serial USB
+da ESP2 e cria um teclado virtual no Linux com `uinput`. Para um teclado
+Bluetooth real, a proxima fase deve mover a emissao HID para o firmware da
+ESP32 em C/ESP-IDF.
+
+### Instalar dependencias
+
+```bash
+cd tools/linux_hid_bridge
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+O usuario precisa ter permissao para ler a porta serial e escrever em
+`/dev/uinput`. Em caso de duvida, teste primeiro com `sudo`.
+
+### Rodar em modo de teste
+
+Feche o `make esp2-monitor`, porque a porta serial so pode ser usada por um
+processo de cada vez. Depois execute:
+
+```bash
+python rightnode_linux_hid_bridge.py --port /dev/ttyUSB1 --dry-run --echo-serial
+```
+
+Ou, a partir da raiz do projeto:
+
+```bash
+make py-dry
+```
+
+Ao pressionar botoes, a saida deve mostrar mudancas como:
+
+```text
+[dry-run] A pressed
+[dry-run] A released
+[dry-run] LEFT pressed
+[dry-run] LEFT released
+```
+
+### Rodar injetando teclas reais no Linux
+
+Com o ambiente virtual ativo:
+
+```bash
+sudo .venv/bin/python rightnode_linux_hid_bridge.py --port /dev/ttyUSB1
+```
+
+Ou, a partir da raiz do projeto:
+
+```bash
+sudo make py
+```
+
+A partir desse momento, os botoes do prototipo passam a agir como um teclado
+real para o Linux:
+
+| Estado da ESP2 | Tecla emitida no Linux |
+| --- | --- |
+| `A=1` | `A` pressionado |
+| `B=1` | `B` pressionado |
+| `UP=1` | seta para cima pressionada |
+| `DOWN=1` | seta para baixo pressionada |
+| `LEFT=1` | seta para esquerda pressionada |
+| `RIGHT=1` | seta para direita pressionada |
+
+Use `Ctrl+C` para parar a ponte. Ao encerrar, o script solta qualquer tecla que
+ainda esteja marcada como pressionada no espelho local.

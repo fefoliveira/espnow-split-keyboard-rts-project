@@ -1,79 +1,81 @@
-# Teclado Split com ESP-NOW
+# ESP-NOW Split Keyboard
 
-## 1. O que e o projeto
+## 1. Project Overview
 
-Este projeto foi desenvolvido para a disciplina de **Sistemas de Tempo Real** e
-tem como objetivo criar um prototipo de teclado dividido (_split keyboard_)
-utilizando duas placas ESP32.
+This project is the final assignment for the **Real-Time Systems** course. It
+belongs to the coursework tracked in the following repository:
 
-Cada placa representa uma metade do teclado. O no esquerdo realiza a leitura
-das teclas e envia os eventos ao no direito por meio do protocolo ESP-NOW. O no
-direito recebe esses eventos, consolida o estado completo e pode enviar a
-saída de duas formas: diretamente como um teclado Bluetooth BLE HID para o
-Linux, ou por meio de uma ponte serial que injeta as teclas no sistema via
-`uinput`.
+https://github.com/fefoliveira/real-time-systems
 
-O firmware e desenvolvido com o framework ESP-IDF e utiliza recursos do
-FreeRTOS, como tarefas periodicas, temporizacao e callbacks.
+The goal is to build a split keyboard prototype using two ESP32 boards.
 
-## 2. Etapas de desenvolvimento e branches
+Each board represents one half of the keyboard. The left node scans its keys
+and sends key events to the right node through ESP-NOW. The right node receives
+those events, merges them with its local keys, keeps the complete keyboard
+state, and can expose the output in two ways: directly as a Bluetooth BLE HID
+keyboard for Linux, or through a serial bridge that injects keys into the
+system with `uinput`.
 
-O historico do projeto foi organizado em branches que representam diferentes
-etapas de experimentacao e desenvolvimento. O fluxo segue uma progressao
-natural de validacao de comunicacao, leitura de botoes, consolidação de estado
-e, por fim, saida HID via Bluetooth:
+The firmware is built with ESP-IDF and uses FreeRTOS features such as periodic
+tasks, timing control, queues, and callbacks.
 
-| Branch               | Objetivo                                                                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `main`               | Disponibilizar a base do projeto ESP-IDF e validar builds independentes para as duas placas dentro do mesmo repositorio. |
-| `feature/esp-now`    | Experimentar e validar a comunicacao ESP-NOW entre os dois ESP32 com mensagens periodicas.                               |
-| `feature/left-node`  | Ler os primeiros botoes do no esquerdo e enviar eventos reais de pressionamento e soltura ao no direito.                 |
-| `feature/right-node` | Integrar as setas locais, uma fila FIFO central e o espelho consolidado das seis teclas no no direito.                   |
-| `feature/bluetooth`  | Adaptar a saida do no direito para anunciar um teclado BLE HID e enviar os eventos diretamente para o Linux.             |
+## 2. Development Stages and Branches
 
-Para acessar uma etapa especifica, utilize:
+The project history is organized into branches that represent different
+experimentation and development stages. The flow follows a natural progression:
+communication validation, button scanning, centralized state consolidation,
+and finally HID output through Bluetooth.
+
+| Branch               | Purpose                                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `main`               | Provide the ESP-IDF project base and validate independent builds for both boards inside the same repository.         |
+| `feature/esp-now`    | Experiment with and validate ESP-NOW communication between the two ESP32 boards using periodic messages.             |
+| `feature/left-node`  | Read the first buttons on the left node and send real press/release events to the right node.                        |
+| `feature/right-node` | Integrate local arrow keys, a central FIFO queue, and the consolidated state mirror of all six keys on the right node. |
+| `feature/bluetooth`  | Adapt the right node output so it advertises a BLE HID keyboard and sends events directly to Linux.                  |
+
+To inspect a specific stage, use:
 
 ```bash
-git switch <nome-da-branch>
+git switch <branch-name>
 ```
 
-Por exemplo:
+For example:
 
 ```bash
 git switch feature/left-node
 ```
 
-## 3. Objetivo da branch `feature/left-node`
+## 3. `feature/left-node` Goal
 
-Esta branch implementa a primeira leitura de teclas fisicas do teclado. O ESP1
-atua como no esquerdo, monitora dois botoes e envia um evento ESP-NOW sempre que
-uma tecla e pressionada ou solta.
+This branch implements the first physical key scanning stage. ESP1 acts as the
+left node, monitors two buttons, and sends an ESP-NOW event whenever a key is
+pressed or released.
 
-O mapeamento atual e:
+The current mapping is:
 
-| Tecla | GPIO   |
-| ----- | ------ |
-| A     | GPIO25 |
-| B     | GPIO26 |
+| Key | GPIO   |
+| --- | ------ |
+| A   | GPIO25 |
+| B   | GPIO26 |
 
-Os GPIOs utilizam resistores de pull-up internos. Cada botao deve ser conectado
-entre o respectivo GPIO e o GND:
+The GPIOs use internal pull-up resistors. Each button must be connected between
+its GPIO and GND:
 
 ```text
-GPIO25 --- botao A --- GND
-GPIO26 --- botao B --- GND
+GPIO25 --- button A --- GND
+GPIO26 --- button B --- GND
 ```
 
-Com essa ligacao, o GPIO permanece em nivel alto enquanto o botao esta solto e
-passa para nivel baixo quando ele e pressionado.
+With this wiring, the GPIO stays high while the button is released and goes low
+when the button is pressed.
 
-O no esquerdo executa uma tarefa FreeRTOS que verifica os botoes a cada 1 ms,
-resultando em uma frequencia de polling de 1000 Hz. Uma mudanca precisa
-permanecer estavel por 5 ms para ser aceita, reduzindo eventos incorretos
-causados pelo efeito mecanico de _bounce_ dos botoes.
+The left node runs a FreeRTOS task that checks the buttons every 1 ms,
+resulting in a 1000 Hz polling rate. A change must remain stable for 5 ms
+before it is accepted, reducing false events caused by mechanical button
+bounce.
 
-Quando uma mudanca valida e detectada, o ESP1 envia uma estrutura `key_event_t`
-em broadcast:
+When a valid change is detected, ESP1 broadcasts a `key_event_t` structure:
 
 ```c
 typedef struct {
@@ -82,33 +84,32 @@ typedef struct {
 } key_event_t;
 ```
 
-O evento informa qual tecla mudou e se ela foi pressionada ou solta. Os
-identificadores `KEY_A` e `KEY_B` usam os valores correspondentes aos codigos
-de teclado USB HID, preparando o protocolo para etapas posteriores.
+The event reports which key changed and whether it was pressed or released.
+The `KEY_A` and `KEY_B` identifiers use values that match USB HID keyboard
+codes, preparing the protocol for later stages.
 
-O ESP2 atua como no direito e centralizador. Alem de receber os eventos remotos
-de A e B, ele monitora quatro botoes locais correspondentes as setas. Eventos
-remotos e locais sao inseridos em uma unica fila FIFO do FreeRTOS.
+ESP2 acts as the right node and centralizer. Besides receiving the remote A and
+B events, it monitors four local buttons mapped to the arrow keys. Remote and
+local events are inserted into a single FreeRTOS FIFO queue.
 
-As duas placas utilizam Wi-Fi no modo Station e canal 1. O envio continua sendo
-feito para o endereco broadcast `FF:FF:FF:FF:FF:FF`, sem criptografia ou
-pareamento unicast.
+Both boards use Wi-Fi Station mode on channel 1. Events are still sent to the
+broadcast address `FF:FF:FF:FF:FF:FF`, without encryption or unicast pairing.
 
-## 4. Fase 2: fila central e estado consolidado
+## 4. Phase 2: Central Queue and Consolidated State
 
-### Debounce compartilhado
+### Shared Debounce
 
-A leitura e o debounce dos botoes dos dois nos ficam centralizados no
-componente `components/button_debounce`. O componente configura entradas
-ativas em nivel baixo com pull-up interno e mantem, para cada botao, o estado
-estavel, o estado candidato e a quantidade de amostras consecutivas.
+Button scanning and debouncing for both nodes are centralized in the
+`components/button_debounce` component. The component configures active-low
+inputs with internal pull-ups and stores, for each button, the stable state,
+the candidate state, and the number of consecutive samples.
 
-Os nos chamam `button_debounce_sample()` a cada 1 ms. A funcao somente produz
-um `key_event_t` depois de cinco amostras iguais e quando o estado validado
-realmente mudou. O no esquerdo envia esse evento por ESP-NOW; o no direito o
-insere na fila central.
+Both nodes call `button_debounce_sample()` every 1 ms. The function only
+produces a `key_event_t` after five equal samples and only when the validated
+state actually changes. The left node sends that event through ESP-NOW; the
+right node inserts it into the central queue.
 
-O no direito mantem um espelho global do estado atual das seis teclas:
+The right node keeps a global mirror of the current state of all six keys:
 
 ```c
 typedef struct {
@@ -121,141 +122,139 @@ typedef struct {
 } keyboard_state_t;
 ```
 
-Uma fila FreeRTOS com capacidade para 32 instancias de `key_event_t` funciona
-como arbitro cronologico. O callback ESP-NOW publica nela os eventos remotos e
-a tarefa `right_local_scan_task` publica os eventos das quatro setas locais.
+A FreeRTOS queue with room for 32 `key_event_t` instances works as the
+chronological arbiter. The ESP-NOW callback publishes remote events to it, and
+the `right_local_scan_task` publishes the four local arrow-key events.
 
-Somente a tarefa `keyboard_consolidation_task` altera o espelho global. Ela
-permanece bloqueada em `xQueueReceive(..., portMAX_DELAY)` quando a fila esta
-vazia, consome os eventos na ordem FIFO e imprime a foto completa do teclado.
-Como existe apenas um escritor do espelho, nao e necessario mutex nesta fase.
+Only `keyboard_consolidation_task` changes the global mirror. It blocks on
+`xQueueReceive(..., portMAX_DELAY)` while the queue is empty, consumes events
+in FIFO order, and prints the full keyboard snapshot. Since there is only one
+writer for the mirror, no mutex is required in this phase.
 
-O callback ESP-NOW executa no contexto da tarefa Wi-Fi de alta prioridade do
-ESP-IDF, nao em uma ISR de hardware. Por isso, a publicacao correta e
-`xQueueSend(..., 0)`, sem bloqueio. A API `xQueueSendFromISR` fica reservada
-para interrupcoes reais.
+The ESP-NOW callback runs in the context of ESP-IDF's high-priority Wi-Fi task,
+not in a hardware ISR. Because of that, the correct publish operation is
+`xQueueSend(..., 0)`, without blocking. `xQueueSendFromISR` remains reserved
+for real interrupts.
 
-As prioridades utilizadas no no direito sao:
+The right node uses the following priorities:
 
-| Rotina                        | Prioridade                                  |
+| Routine                       | Priority                                    |
 | ----------------------------- | ------------------------------------------- |
-| Callback ESP-NOW              | Contexto interno da tarefa Wi-Fi do ESP-IDF |
+| ESP-NOW callback              | ESP-IDF internal Wi-Fi task context         |
 | `right_local_scan_task`       | `configMAX_PRIORITIES - 2`                  |
 | `keyboard_consolidation_task` | 3                                           |
 
-O scanner local usa `xTaskDelayUntil()` com periodo de 1 ms e debounce de 5
-amostras consecutivas, igual ao no esquerdo.
+The local scanner uses `xTaskDelayUntil()` with a 1 ms period and a debounce
+window of five consecutive samples, just like the left node.
 
-O mapeamento fisico do no direito e:
+The physical mapping of the right node is:
 
-| Tecla              | GPIO   |
-| ------------------ | ------ |
-| Seta para cima     | GPIO25 |
-| Seta para baixo    | GPIO33 |
-| Seta para esquerda | GPIO27 |
-| Seta para direita  | GPIO26 |
+| Key         | GPIO   |
+| ----------- | ------ |
+| Arrow up    | GPIO25 |
+| Arrow down  | GPIO33 |
+| Arrow left  | GPIO27 |
+| Arrow right | GPIO26 |
 
-### Estrutura do projeto
+### Project Structure
 
-A estrutura principal encontrada nesta branch e:
+The main structure of this branch is:
 
 ```text
 .
-|-- CMakeLists.txt                       # Configuracao principal de build do ESP-IDF
-|-- Makefile                             # Comandos de build, gravacao e monitor das duas placas
-|-- README.md                            # Documentacao geral do projeto e desta branch
+|-- CMakeLists.txt                       # Main ESP-IDF build configuration
+|-- Makefile                             # Build, flash, and monitor commands for both boards
+|-- README.md                            # General project and branch documentation
 |-- components/
-|   `-- shared_protocol/                 # Componente compartilhado pelos dois firmwares
-|       |-- CMakeLists.txt               # Exporta o diretorio de cabecalhos do protocolo
+|   |-- button_debounce/                 # Shared active-low button debounce component
+|   |-- keyboard_hid/                    # BLE HID keyboard output component
+|   `-- shared_protocol/                 # Component shared by both firmware targets
+|       |-- CMakeLists.txt               # Exports the protocol header directory
 |       `-- include/
-|           `-- protocol.h               # IDs das teclas e formato do evento enviado
-|-- main/                                # Componente principal da aplicacao
-|   |-- CMakeLists.txt                   # Registra fontes, dependencias e protocolo compartilhado
-|   |-- Kconfig.projbuild                # Permite selecionar o no esquerdo ou direito
-|   |-- main.c                           # Inicializa o sistema e inicia o no configurado
+|           `-- protocol.h               # Key IDs and transmitted event format
+|-- main/                                # Main application component
+|   |-- CMakeLists.txt                   # Registers sources, dependencies, and shared protocol
+|   |-- Kconfig.projbuild                # Selects left or right node and output mode
+|   |-- main.c                           # Initializes the configured node
 |   |-- left_node/
-|   |   |-- left_node.c                  # Le GPIO25/GPIO26, aplica debounce e envia eventos
-|   |   `-- left_node.h                  # Interface publica do no esquerdo
+|   |   |-- left_node.c                  # Reads GPIO25/GPIO26, debounces, and sends events
+|   |   `-- left_node.h                  # Public interface for the left node
 |   `-- right_node/
-|       |-- right_node.c                 # Recebe, interpreta e registra os eventos de tecla
-|       `-- right_node.h                 # Interface publica do no direito
-|-- sdkconfig.defaults.esp1              # Seleciona o no esquerdo e tick do FreeRTOS em 1000 Hz
-|-- sdkconfig.defaults.esp2              # Seleciona o no direito e tick do FreeRTOS em 1000 Hz
-|-- sdkconfig.esp1                       # Configuracao completa gerada para o ESP1
-|-- sdkconfig.esp2                       # Configuracao completa gerada para o ESP2
-|-- build/                               # Build padrao criado pelo idf.py, quando utilizado
-|-- build-esp1/                          # Artefatos de compilacao exclusivos do no esquerdo
-`-- build-esp2/                          # Artefatos de compilacao exclusivos do no direito
+|       |-- right_node.c                 # Receives, merges, and emits key events
+|       `-- right_node.h                 # Public interface for the right node
+|-- tools/
+|   `-- linux_hid_bridge/                # Optional serial-to-uinput Linux bridge
+|-- sdkconfig.defaults.esp1              # Selects the left node and a 1000 Hz FreeRTOS tick
+`-- sdkconfig.defaults.esp2              # Selects the right node and a 1000 Hz FreeRTOS tick
 ```
 
-Os diretorios de build e os arquivos `sdkconfig` completos sao gerados pelo
-ESP-IDF. Por isso, eles podem nao existir logo apos clonar o repositorio e
-aparecem conforme os comandos de compilacao sao executados.
+Build directories and full `sdkconfig` files are generated by ESP-IDF. They may
+not exist immediately after cloning the repository and appear as build commands
+are executed.
 
-O componente `shared_protocol` garante que transmissor e receptor utilizem a
-mesma definicao de teclas e o mesmo formato de pacote. O `Makefile`, por sua
-vez, mantem configuracoes e builds separados para os dois firmwares dentro do
-mesmo repositorio.
+The `shared_protocol` component ensures that sender and receiver use the same
+key definitions and packet format. The `Makefile` keeps separate configurations
+and build directories for both firmware images inside the same repository.
 
-## 5. Como executar esta branch
+## 5. Running the Project
 
-Por padrao, o `Makefile` considera:
+By default, the `Makefile` assumes:
 
-- ESP-IDF em `~/esp/v5.5-rc1/esp-idf/export.sh`;
-- ESP1, no esquerdo, na porta `/dev/ttyUSB0`;
-- ESP2, no direito, na porta `/dev/ttyUSB1`;
-- alvo de compilacao `esp32`.
+- ESP-IDF is available at `~/esp/v5.5-rc1/esp-idf/export.sh`;
+- ESP1, the left node, is connected to `/dev/ttyUSB0`;
+- ESP2, the right node, is connected to `/dev/ttyUSB1`;
+- the build target is `esp32`.
 
-Caso sua instalacao do ESP-IDF esteja em outro local, informe o caminho ao
-executar o comando:
+If your ESP-IDF installation is located somewhere else, pass the path when
+running the command:
 
 ```bash
 make esp1 IDF_EXPORT="$HOME/esp/esp-idf/export.sh"
 ```
 
-### Montar os botoes
+### Wire the Buttons
 
-Com as placas desligadas, conecte:
+With both boards powered off, connect:
 
 ```text
-ESP1 GPIO25 --- botao A --- GND
-ESP1 GPIO26 --- botao B --- GND
+ESP1 GPIO25 --- button A --- GND
+ESP1 GPIO26 --- button B --- GND
 
-ESP2 GPIO25 --- botao seta para cima --- GND
-ESP2 GPIO33 --- botao seta para baixo --- GND
-ESP2 GPIO27 --- botao seta para esquerda --- GND
-ESP2 GPIO26 --- botao seta para direita --- GND
+ESP2 GPIO25 --- arrow up button --- GND
+ESP2 GPIO33 --- arrow down button --- GND
+ESP2 GPIO27 --- arrow left button --- GND
+ESP2 GPIO26 --- arrow right button --- GND
 ```
 
-Nao e necessario adicionar resistores externos para este teste, pois o firmware
-habilita os resistores de pull-up internos do ESP32.
+External resistors are not required for this test because the firmware enables
+the ESP32 internal pull-up resistors.
 
-### Compilar, gravar e monitorar as duas placas
+### Build, Flash, and Monitor Both Boards
 
-Conecte as duas placas ao computador. Em um terminal, compile e grave o
-firmware do no esquerdo no ESP1:
+Connect both boards to the computer. In one terminal, build and flash the left
+node firmware to ESP1:
 
 ```bash
 make esp1
 ```
 
-Em outro terminal, compile e grave o firmware receptor no ESP2:
+In another terminal, build and flash the receiver firmware to ESP2:
 
 ```bash
 make esp2
 ```
 
-Os comandos tambem podem ser executados pelos aliases:
+The same commands are also available through aliases:
 
 ```bash
 make left
 make right
 ```
 
-Cada comando utiliza seu proprio `sdkconfig`, diretorio de build e porta serial.
-Os dois monitores podem permanecer abertos simultaneamente.
+Each command uses its own `sdkconfig`, build directory, and serial port. Both
+serial monitors can remain open at the same time.
 
-Ao iniciar o ESP1, a saida esperada inclui:
+When ESP1 starts, the expected output includes:
 
 ```text
 I (...) APP_MAIN: Configured as LEFT half
@@ -263,10 +262,10 @@ I (...) LEFT_NODE: Starting LEFT scanner: KEY_A=GPIO25, KEY_B=GPIO26, polling=10
 I (...) main_task: Returned from app_main()
 ```
 
-O retorno de `app_main()` e normal. A tarefa `left_button_scan_task` continua
-executando e monitorando os GPIOs.
+Returning from `app_main()` is expected. The `left_button_scan_task` continues
+running and monitoring the GPIOs.
 
-Ao iniciar o ESP2, a saida esperada inclui:
+When ESP2 starts, the expected output includes:
 
 ```text
 I (...) APP_MAIN: Configured as RIGHT half
@@ -276,45 +275,45 @@ I (...) RIGHT_NODE: Central key-event queue ready
 I (...) main_task: Returned from app_main()
 ```
 
-O ESP2 continua ativo por meio do callback ESP-NOW e das tarefas
-`right_local_scan_task` e `keyboard_consolidation_task` mesmo depois do retorno
-de `app_main()`.
+ESP2 remains active through the ESP-NOW callback, `right_local_scan_task`, and
+`keyboard_consolidation_task` even after `app_main()` returns.
 
-Com `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y`, a serial do ESP2 fica apenas para logs
-de diagnostico e pareamento. A saida real das teclas vai pelo Bluetooth, sem a
-ponte Python. Para testar, pare o monitor se quiser, abra as configuracoes de
-Bluetooth do Linux e pareie com o dispositivo `ESP Split Keyboard`.
+With `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y`, the ESP2 serial port is only used for
+diagnostic and pairing logs. The actual key output goes through Bluetooth,
+without the Python bridge. To test it, stop the monitor if desired, open the
+Linux Bluetooth settings, and pair with `ESP Split Keyboard`.
 
-Ao pressionar e soltar o botao A em modo serial, o monitor do ESP2 deve exibir:
+When pressing and releasing button A in serial output mode, the ESP2 monitor
+should show:
 
 ```text
 I (...) RIGHT_NODE: Keyboard state: A=1 B=0 UP=0 DOWN=0 LEFT=0 RIGHT=0
 I (...) RIGHT_NODE: Keyboard state: A=0 B=0 UP=0 DOWN=0 LEFT=0 RIGHT=0
 ```
 
-Para o botao B, a saida esperada e:
+For button B, the expected output is:
 
 ```text
 I (...) RIGHT_NODE: Keyboard state: A=0 B=1 UP=0 DOWN=0 LEFT=0 RIGHT=0
 I (...) RIGHT_NODE: Keyboard state: A=0 B=0 UP=0 DOWN=0 LEFT=0 RIGHT=0
 ```
 
-Ao pressionar a seta para cima no ESP2:
+When pressing the up arrow on ESP2:
 
 ```text
 I (...) RIGHT_NODE: Keyboard state: A=0 B=0 UP=1 DOWN=0 LEFT=0 RIGHT=0
 ```
 
-Se as portas seriais forem diferentes das configuracoes padrao:
+If your serial ports differ from the default configuration:
 
 ```bash
 make esp1 ESP1_PORT=/dev/ttyACM0
 make esp2 ESP2_PORT=/dev/ttyACM1
 ```
 
-Para sair do monitor serial do ESP-IDF, pressione `Ctrl+]`.
+To leave the ESP-IDF serial monitor, press `Ctrl+]`.
 
-Tambem e possivel executar cada etapa separadamente:
+Each stage can also be executed separately:
 
 ```bash
 make esp1-build
@@ -326,101 +325,92 @@ make esp2-flash
 make esp2-monitor
 ```
 
-Nesta etapa, o teste e considerado bem-sucedido quando eventos remotos e locais
-atualizam corretamente a foto consolidada das seis teclas, respeitando a ordem
-FIFO da fila central.
+At this stage, the test is considered successful when remote and local events
+correctly update the consolidated six-key snapshot while preserving the FIFO
+order of the central queue.
 
-## 6. Saida HID: Bluetooth direto ou ponte serial
+## 6. HID Output: Direct Bluetooth or Serial Bridge
 
-O no direito possui dois modos de saida suportados e selecionados por Kconfig:
-ambos devem ser considerados dependendo do objetivo de teste ou uso final. O
-primeiro envia os eventos diretamente para o Linux via Bluetooth BLE HID; o
-segundo envia a mesma informacao pela serial USB para uma ponte em Python.
+The right node supports two Kconfig-selected output modes. Both are useful
+depending on whether the goal is final usage or debugging.
 
-| Macro                              | Comportamento                                                                                               |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y` | A ESP2 anuncia um teclado BLE chamado `ESP Split Keyboard` e envia os reports HID diretamente para o Linux. |
-| `CONFIG_KEYBOARD_OUTPUT_SERIAL=y`  | A ESP2 imprime a foto consolidada na serial, mantendo compatibilidade com a ponte Python por `uinput`.      |
+| Macro                              | Behavior                                                                                                  |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y` | ESP2 advertises a BLE keyboard named `ESP Split Keyboard` and sends HID reports directly to Linux.        |
+| `CONFIG_KEYBOARD_OUTPUT_SERIAL=y`  | ESP2 prints the consolidated keyboard snapshot over serial, keeping compatibility with the Python bridge. |
 
-O no direito possui dois modos de saida selecionados por Kconfig:
-
-| Macro                              | Comportamento                                                                                               |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y` | A ESP2 anuncia um teclado BLE chamado `ESP Split Keyboard` e envia os reports HID diretamente para o Linux. |
-| `CONFIG_KEYBOARD_OUTPUT_SERIAL=y`  | A ESP2 imprime a foto consolidada na serial, mantendo compatibilidade com a ponte Python por `uinput`.      |
-
-O arquivo `sdkconfig.defaults.esp2` esta configurado atualmente para Bluetooth:
+The current `sdkconfig.defaults.esp2` file is configured for Bluetooth:
 
 ```text
 CONFIG_KEYBOARD_OUTPUT_BLE_HID=y
 # CONFIG_KEYBOARD_OUTPUT_SERIAL is not set
 ```
 
-Fluxo atual recomendado:
+The recommended current flow is:
 
 ```text
-ESP1 botoes A/B
+ESP1 A/B buttons
     -> ESP-NOW
 ESP2 right_node
-    -> fila FreeRTOS
-    -> espelho consolidado
+    -> FreeRTOS queue
+    -> consolidated state mirror
     -> BLE HID
 Linux
 ```
 
-Para compilar e gravar a ESP2 nesse modo:
+To build and flash ESP2 in this mode:
 
 ```bash
 make esp2-build-flash
 ```
 
-Depois, no Linux, pareie o dispositivo Bluetooth `ESP Split Keyboard`. O
-`make py` nao e necessario nesse modo.
+Then pair the Bluetooth device `ESP Split Keyboard` on Linux. `make py` is not
+required in this mode.
 
-Resumo dos comandos por modo:
+Command summary by mode:
 
-| Modo             | Macro ativa na ESP2                | Comando no Linux                                 |
-| ---------------- | ---------------------------------- | ------------------------------------------------ |
-| Bluetooth direto | `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y` | Parear `ESP Split Keyboard`; nao usar `make py`. |
-| Debug serial     | `CONFIG_KEYBOARD_OUTPUT_SERIAL=y`  | Usar `make py-dry` ou `sudo make py`.            |
+| Mode             | Active macro on ESP2              | Linux command                                      |
+| ---------------- | --------------------------------- | -------------------------------------------------- |
+| Direct Bluetooth | `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y` | Pair `ESP Split Keyboard`; do not use `make py`.   |
+| Serial debug     | `CONFIG_KEYBOARD_OUTPUT_SERIAL=y` | Use `make py-dry` or `sudo make py`.               |
 
-### Ponte HID serial para Linux
+### Linux Serial HID Bridge
 
-Como alternativa de depuracao, o computador Linux tambem pode receber as teclas
-consolidadas pela ESP2 por meio de uma ponte em Python:
+As a debugging alternative, the Linux computer can also receive the
+consolidated keys from ESP2 through a Python bridge:
 
 ```text
-ESP1 botoes A/B
+ESP1 A/B buttons
     -> ESP-NOW
 ESP2 right_node
-    -> serial USB com "Keyboard state: ..."
-Python no Linux
+    -> USB serial with "Keyboard state: ..."
+Python on Linux
     -> uinput
-Aplicacoes do Linux
+Linux applications
 ```
 
-Essa ponte usa a serial USB da ESP2 e cria um teclado virtual no Linux com
-`uinput`. Para usa-la, selecione `CONFIG_KEYBOARD_OUTPUT_SERIAL=y` no
-`sdkconfig.esp2` ou via `idf.py menuconfig`.
+This bridge uses the ESP2 USB serial output and creates a virtual keyboard on
+Linux with `uinput`. To use it, select `CONFIG_KEYBOARD_OUTPUT_SERIAL=y` in
+`sdkconfig.esp2` or through `idf.py menuconfig`.
 
-Esse modo continua sendo util quando o pareamento Bluetooth estiver instavel,
-quando for necessario enxergar exatamente o texto emitido pela ESP2 ou quando
-voce quiser testar a consolidacao das teclas sem depender da pilha BLE.
+This mode remains useful when Bluetooth pairing is unstable, when the exact
+text emitted by ESP2 needs to be inspected, or when key consolidation should be
+tested independently from the BLE stack.
 
-Configuracao esperada para usar `make py`:
+Expected configuration for `make py`:
 
 ```text
 # CONFIG_KEYBOARD_OUTPUT_BLE_HID is not set
 CONFIG_KEYBOARD_OUTPUT_SERIAL=y
 ```
 
-Depois de alterar a macro, recompile e grave a ESP2:
+After changing the macro, rebuild and flash ESP2:
 
 ```bash
 make esp2-build-flash
 ```
 
-### Instalar dependencias
+### Install Dependencies
 
 ```bash
 cd tools/linux_hid_bridge
@@ -429,25 +419,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-O usuario precisa ter permissao para ler a porta serial e escrever em
-`/dev/uinput`. Em caso de duvida, teste primeiro com `sudo`.
+The user must have permission to read the serial port and write to
+`/dev/uinput`. If in doubt, test with `sudo` first.
 
-### Rodar em modo de teste
+### Run in Test Mode
 
-Feche o `make esp2-monitor`, porque a porta serial so pode ser usada por um
-processo de cada vez. Depois execute:
+Close `make esp2-monitor`, because only one process can use the serial port at
+a time. Then run:
 
 ```bash
 python rightnode_linux_hid_bridge.py --port /dev/ttyUSB1 --dry-run --echo-serial
 ```
 
-Ou, a partir da raiz do projeto:
+Or, from the project root:
 
 ```bash
 make py-dry
 ```
 
-Ao pressionar botoes, a saida deve mostrar mudancas como:
+When pressing buttons, the output should show changes such as:
 
 ```text
 [dry-run] A pressed
@@ -456,31 +446,31 @@ Ao pressionar botoes, a saida deve mostrar mudancas como:
 [dry-run] LEFT released
 ```
 
-### Rodar injetando teclas reais no Linux
+### Run Injecting Real Keys Into Linux
 
-Com o ambiente virtual ativo:
+With the virtual environment active:
 
 ```bash
 sudo .venv/bin/python rightnode_linux_hid_bridge.py --port /dev/ttyUSB1
 ```
 
-Ou, a partir da raiz do projeto:
+Or, from the project root:
 
 ```bash
 sudo make py
 ```
 
-A partir desse momento, os botoes do prototipo passam a agir como um teclado
-real para o Linux:
+From that moment on, the prototype buttons behave as a real keyboard for
+Linux:
 
-| Estado da ESP2 | Tecla emitida no Linux         |
-| -------------- | ------------------------------ |
-| `A=1`          | `A` pressionado                |
-| `B=1`          | `B` pressionado                |
-| `UP=1`         | seta para cima pressionada     |
-| `DOWN=1`       | seta para baixo pressionada    |
-| `LEFT=1`       | seta para esquerda pressionada |
-| `RIGHT=1`      | seta para direita pressionada  |
+| ESP2 state | Key emitted on Linux     |
+| ---------- | ------------------------ |
+| `A=1`      | `A` pressed              |
+| `B=1`      | `B` pressed              |
+| `UP=1`     | arrow up pressed         |
+| `DOWN=1`   | arrow down pressed       |
+| `LEFT=1`   | arrow left pressed       |
+| `RIGHT=1`  | arrow right pressed      |
 
-Use `Ctrl+C` para parar a ponte. Ao encerrar, o script solta qualquer tecla que
-ainda esteja marcada como pressionada no espelho local.
+Use `Ctrl+C` to stop the bridge. On exit, the script releases any key that is
+still marked as pressed in the local mirror.

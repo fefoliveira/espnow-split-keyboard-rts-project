@@ -1,0 +1,29 @@
+menu "Keyboard Configuration"
+
+    choice KEYBOARD_TARGET_DEVICE
+        prompt "Target Device"
+        default KEYBOARD_HALF_LEFT
+        help
+            Select which split-keyboard half this firmware image targets.
+
+        config KEYBOARD_HALF_LEFT
+            bool "Left Half (ESP1)"
+
+        config KEYBOARD_HALF_RIGHT
+            bool "Right Half (ESP2)"
+    endchoice
+
+    choice KEYBOARD_OUTPUT_MODE
+        prompt "Right node output mode"
+        default KEYBOARD_OUTPUT_BLE_HID
+        help
+            Select how the right node emits the consolidated keyboard state.
+
+        config KEYBOARD_OUTPUT_BLE_HID
+            bool "Bluetooth BLE HID keyboard"
+
+        config KEYBOARD_OUTPUT_SERIAL
+            bool "Serial log bridge"
+    endchoice
+
+endmenu

@@ -8,8 +8,10 @@ utilizando duas placas ESP32.
 
 Cada placa representa uma metade do teclado. O no esquerdo realiza a leitura
 das teclas e envia os eventos ao no direito por meio do protocolo ESP-NOW. O no
-direito recebe esses eventos, consolida o estado completo e pode atuar como um
-teclado Bluetooth BLE HID para o Linux.
+direito recebe esses eventos, consolida o estado completo e pode enviar a
+saída de duas formas: diretamente como um teclado Bluetooth BLE HID para o
+Linux, ou por meio de uma ponte serial que injeta as teclas no sistema via
+`uinput`.
 
 O firmware e desenvolvido com o framework ESP-IDF e utiliza recursos do
 FreeRTOS, como tarefas periodicas, temporizacao e callbacks.
@@ -329,6 +331,16 @@ atualizam corretamente a foto consolidada das seis teclas, respeitando a ordem
 FIFO da fila central.
 
 ## 6. Saida HID: Bluetooth direto ou ponte serial
+
+O no direito possui dois modos de saida suportados e selecionados por Kconfig:
+ambos devem ser considerados dependendo do objetivo de teste ou uso final. O
+primeiro envia os eventos diretamente para o Linux via Bluetooth BLE HID; o
+segundo envia a mesma informacao pela serial USB para uma ponte em Python.
+
+| Macro                              | Comportamento                                                                                               |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y` | A ESP2 anuncia um teclado BLE chamado `ESP Split Keyboard` e envia os reports HID diretamente para o Linux. |
+| `CONFIG_KEYBOARD_OUTPUT_SERIAL=y`  | A ESP2 imprime a foto consolidada na serial, mantendo compatibilidade com a ponte Python por `uinput`.      |
 
 O no direito possui dois modos de saida selecionados por Kconfig:
 

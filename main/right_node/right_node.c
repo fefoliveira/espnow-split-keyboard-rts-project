@@ -227,11 +227,9 @@ void right_node_start(void)
             "keyboard_consolidation_task",
             4096,
             NULL,
-            CONSOLIDATION_TASK_PRIORITY,
+            CONSOLIDATION_TASK_PRIORITY, // 3
             NULL
-        ) == pdPASS
-            ? ESP_OK
-            : ESP_ERR_NO_MEM
+        ) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM
     );
 
     ESP_ERROR_CHECK(
@@ -240,11 +238,9 @@ void right_node_start(void)
             "right_local_scan_task",
             4096,
             NULL,
-            configMAX_PRIORITIES - 2,
+            configMAX_PRIORITIES - 2, // 23
             NULL
-        ) == pdPASS
-            ? ESP_OK
-            : ESP_ERR_NO_MEM
+        ) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM
     );
 
     ESP_ERROR_CHECK(esp_now_init());

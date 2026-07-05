@@ -55,8 +55,10 @@ static void espnow_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_stat
     }
 }
 #else
-static void espnow_send_cb(const uint8_t *destination, esp_now_send_status_t status)
-{
+static void espnow_send_cb (
+    const uint8_t *destination, 
+    esp_now_send_status_t status
+) {
     if (destination == NULL) {
         ESP_LOGE(TAG, "Send callback received no destination");
         return;
@@ -142,10 +144,8 @@ void left_node_start(void)
             "left_button_scan_task",
             4096,
             NULL,
-            configMAX_PRIORITIES - 1,
+            configMAX_PRIORITIES - 1, // 24
             NULL
-        ) == pdPASS
-            ? ESP_OK
-            : ESP_ERR_NO_MEM
+        ) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM
     );
 }

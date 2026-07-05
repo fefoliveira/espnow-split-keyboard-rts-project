@@ -11,6 +11,7 @@ idf_component_register(
 		button_debounce
 		esp_driver_gpio
 		esp_event
+		keyboard_hid
 		esp_netif
 		esp_timer
 		esp_wifi  # esp_now API is provided by esp_wifi in ESP-IDF

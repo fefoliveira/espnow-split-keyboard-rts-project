@@ -8,8 +8,8 @@ utilizando duas placas ESP32.
 
 Cada placa representa uma metade do teclado. O no esquerdo realiza a leitura
 das teclas e envia os eventos ao no direito por meio do protocolo ESP-NOW. O no
-direito recebe esses eventos e, nas proximas etapas, sera responsavel por
-processa-los como entradas de um teclado.
+direito recebe esses eventos, consolida o estado completo e pode atuar como um
+teclado Bluetooth BLE HID para o Linux.
 
 O firmware e desenvolvido com o framework ESP-IDF e utiliza recursos do
 FreeRTOS, como tarefas periodicas, temporizacao e callbacks.
@@ -266,6 +266,7 @@ Ao iniciar o ESP2, a saida esperada inclui:
 ```text
 I (...) APP_MAIN: Configured as RIGHT half
 I (...) RIGHT_NODE: Starting RIGHT half: UP=GPIO25 DOWN=GPIO33 LEFT=GPIO27 RIGHT=GPIO26
+I (...) KEYBOARD_HID: Initializing BLE HID keyboard output
 I (...) RIGHT_NODE: Central key-event queue ready
 I (...) main_task: Returned from app_main()
 ```
@@ -274,7 +275,12 @@ O ESP2 continua ativo por meio do callback ESP-NOW e das tarefas
 `right_local_scan_task` e `keyboard_consolidation_task` mesmo depois do retorno
 de `app_main()`.
 
-Ao pressionar e soltar o botao A, o monitor do ESP2 deve exibir:
+Com `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y`, a serial do ESP2 fica apenas para logs
+de diagnostico e pareamento. A saida real das teclas vai pelo Bluetooth, sem a
+ponte Python. Para testar, pare o monitor se quiser, abra as configuracoes de
+Bluetooth do Linux e pareie com o dispositivo `ESP Split Keyboard`.
+
+Ao pressionar e soltar o botao A em modo serial, o monitor do ESP2 deve exibir:
 
 ```text
 I (...) RIGHT_NODE: Keyboard state: A=1 B=0 UP=0 DOWN=0 LEFT=0 RIGHT=0
@@ -319,10 +325,54 @@ Nesta etapa, o teste e considerado bem-sucedido quando eventos remotos e locais
 atualizam corretamente a foto consolidada das seis teclas, respeitando a ordem
 FIFO da fila central.
 
-## 6. Ponte HID para Linux
+## 6. Saida HID: Bluetooth direto ou ponte serial
 
-Nesta etapa, o computador Linux pode receber as teclas consolidadas pela ESP2
-por meio de uma ponte em Python:
+O no direito possui dois modos de saida selecionados por Kconfig:
+
+| Macro | Comportamento |
+| --- | --- |
+| `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y` | A ESP2 anuncia um teclado BLE chamado `ESP Split Keyboard` e envia os reports HID diretamente para o Linux. |
+| `CONFIG_KEYBOARD_OUTPUT_SERIAL=y` | A ESP2 imprime a foto consolidada na serial, mantendo compatibilidade com a ponte Python por `uinput`. |
+
+O arquivo `sdkconfig.defaults.esp2` esta configurado atualmente para Bluetooth:
+
+```text
+CONFIG_KEYBOARD_OUTPUT_BLE_HID=y
+# CONFIG_KEYBOARD_OUTPUT_SERIAL is not set
+```
+
+Fluxo atual recomendado:
+
+```text
+ESP1 botoes A/B
+    -> ESP-NOW
+ESP2 right_node
+    -> fila FreeRTOS
+    -> espelho consolidado
+    -> BLE HID
+Linux
+```
+
+Para compilar e gravar a ESP2 nesse modo:
+
+```bash
+make esp2-build-flash
+```
+
+Depois, no Linux, pareie o dispositivo Bluetooth `ESP Split Keyboard`. O
+`make py` nao e necessario nesse modo.
+
+Resumo dos comandos por modo:
+
+| Modo | Macro ativa na ESP2 | Comando no Linux |
+| --- | --- | --- |
+| Bluetooth direto | `CONFIG_KEYBOARD_OUTPUT_BLE_HID=y` | Parear `ESP Split Keyboard`; nao usar `make py`. |
+| Debug serial | `CONFIG_KEYBOARD_OUTPUT_SERIAL=y` | Usar `make py-dry` ou `sudo make py`. |
+
+### Ponte HID serial para Linux
+
+Como alternativa de depuracao, o computador Linux tambem pode receber as teclas
+consolidadas pela ESP2 por meio de uma ponte em Python:
 
 ```text
 ESP1 botoes A/B
@@ -334,10 +384,26 @@ Python no Linux
 Aplicacoes do Linux
 ```
 
-Essa ponte ainda nao e BLE HID rodando dentro da ESP32. Ela usa a serial USB
-da ESP2 e cria um teclado virtual no Linux com `uinput`. Para um teclado
-Bluetooth real, a proxima fase deve mover a emissao HID para o firmware da
-ESP32 em C/ESP-IDF.
+Essa ponte usa a serial USB da ESP2 e cria um teclado virtual no Linux com
+`uinput`. Para usa-la, selecione `CONFIG_KEYBOARD_OUTPUT_SERIAL=y` no
+`sdkconfig.esp2` ou via `idf.py menuconfig`.
+
+Esse modo continua sendo util quando o pareamento Bluetooth estiver instavel,
+quando for necessario enxergar exatamente o texto emitido pela ESP2 ou quando
+voce quiser testar a consolidacao das teclas sem depender da pilha BLE.
+
+Configuracao esperada para usar `make py`:
+
+```text
+# CONFIG_KEYBOARD_OUTPUT_BLE_HID is not set
+CONFIG_KEYBOARD_OUTPUT_SERIAL=y
+```
+
+Depois de alterar a macro, recompile e grave a ESP2:
+
+```bash
+make esp2-build-flash
+```
 
 ### Instalar dependencias
 

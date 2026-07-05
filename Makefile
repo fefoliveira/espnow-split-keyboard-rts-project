@@ -7,6 +7,7 @@ IDF_TARGET ?= esp32
 # ESP1 = left half on /dev/ttyUSB0, ESP2 = right half on /dev/ttyUSB1.
 ESP1_PORT ?= /dev/ttyUSB0
 ESP2_PORT ?= /dev/ttyUSB1
+FLASH_BAUD ?= 115200
 
 ESP1_BUILD_DIR ?= build-esp1
 ESP2_BUILD_DIR ?= build-esp2
@@ -47,16 +48,17 @@ help:
 	@printf "  make py            Read ESP2 serial and inject keys through Linux uinput\n"
 	@printf "  make py-install    Create Python venv and install bridge dependencies\n"
 	@printf "\nOverride ports if needed: make esp1 ESP1_PORT=/dev/ttyACM0\n"
+	@printf "Override flash baud if needed: make esp1 FLASH_BAUD=460800\n"
 	@printf "Python bridge port follows ESP2_PORT by default: make py ESP2_PORT=/dev/ttyACM1\n"
 
 check-idf:
 	@test -f "$(IDF_EXPORT)" || (printf "ESP-IDF export.sh not found: %s\n" "$(IDF_EXPORT)"; exit 1)
 
 esp1: check-idf
-	$(ESP1_IDF) -p "$(ESP1_PORT)" flash monitor
+	$(ESP1_IDF) -p "$(ESP1_PORT)" -b "$(FLASH_BAUD)" flash monitor
 
 esp2: check-idf
-	$(ESP2_IDF) -p "$(ESP2_PORT)" flash monitor
+	$(ESP2_IDF) -p "$(ESP2_PORT)" -b "$(FLASH_BAUD)" flash monitor
 
 left: esp1
 
@@ -69,16 +71,16 @@ esp2-build: check-idf
 	$(ESP2_IDF) build
 
 esp1-flash: check-idf
-	$(ESP1_IDF) -p "$(ESP1_PORT)" flash
+	$(ESP1_IDF) -p "$(ESP1_PORT)" -b "$(FLASH_BAUD)" flash
 
 esp1-build-flash: check-idf
-	$(ESP1_IDF) -p "$(ESP1_PORT)" build flash
+	$(ESP1_IDF) -p "$(ESP1_PORT)" -b "$(FLASH_BAUD)" build flash
 
 esp2-flash: check-idf
-	$(ESP2_IDF) -p "$(ESP2_PORT)" flash
+	$(ESP2_IDF) -p "$(ESP2_PORT)" -b "$(FLASH_BAUD)" flash
 
 esp2-build-flash: check-idf
-	$(ESP2_IDF) -p "$(ESP2_PORT)" build flash
+	$(ESP2_IDF) -p "$(ESP2_PORT)" -b "$(FLASH_BAUD)" build flash
 
 esp1-monitor: check-idf
 	$(ESP1_IDF) -p "$(ESP1_PORT)" monitor

@@ -12,12 +12,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "keyboard_hid.h"
 #include "protocol.h"
 
 static const char *TAG = "RIGHT_NODE";
 
-#define RIGHT_ARROW_UP_GPIO GPIO_NUM_33
-#define RIGHT_ARROW_DOWN_GPIO GPIO_NUM_25
+#define RIGHT_ARROW_UP_GPIO GPIO_NUM_25
+#define RIGHT_ARROW_DOWN_GPIO GPIO_NUM_33
 #define RIGHT_ARROW_LEFT_GPIO GPIO_NUM_27
 #define RIGHT_ARROW_RIGHT_GPIO GPIO_NUM_26
 
@@ -26,16 +27,7 @@ static const char *TAG = "RIGHT_NODE";
 #define KEY_EVENT_QUEUE_LENGTH 32
 #define CONSOLIDATION_TASK_PRIORITY 3
 
-typedef struct {
-    bool key_a;
-    bool key_b;
-    bool arrow_up;
-    bool arrow_down;
-    bool arrow_left;
-    bool arrow_right;
-} keyboard_state_t;
-
-static keyboard_state_t s_keyboard_state = {0};
+static keyboard_hid_state_t s_keyboard_state = {0};
 static QueueHandle_t s_key_event_queue;
 
 static debounced_button_t s_local_buttons[] = {
@@ -174,6 +166,7 @@ static void update_keyboard_state(const key_event_t *event)
 
 static void log_keyboard_state(void)
 {
+#if CONFIG_KEYBOARD_OUTPUT_SERIAL
     ESP_LOGI(
         TAG,
         "Keyboard state: A=%d B=%d UP=%d DOWN=%d LEFT=%d RIGHT=%d",
@@ -184,6 +177,7 @@ static void log_keyboard_state(void)
         s_keyboard_state.arrow_left,
         s_keyboard_state.arrow_right
     );
+#endif
 }
 
 static void keyboard_consolidation_task(void *arg)
@@ -196,6 +190,10 @@ static void keyboard_consolidation_task(void *arg)
         if (xQueueReceive(s_key_event_queue, &event, portMAX_DELAY) == pdPASS) {
             update_keyboard_state(&event);
             log_keyboard_state();
+            esp_err_t err = keyboard_hid_send_state(&s_keyboard_state);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to send HID state: %s", esp_err_to_name(err));
+            }
         }
     }
 }
@@ -221,6 +219,7 @@ void right_node_start(void)
         )
     );
     wifi_init_sta_for_espnow();
+    ESP_ERROR_CHECK(keyboard_hid_init());
 
     ESP_ERROR_CHECK(
         xTaskCreate(

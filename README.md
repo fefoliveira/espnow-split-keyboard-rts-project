@@ -17,7 +17,9 @@ FreeRTOS, como tarefas periodicas, temporizacao e callbacks.
 ## 2. Etapas de desenvolvimento e branches
 
 O historico do projeto foi organizado em branches que representam diferentes
-etapas de experimentacao e desenvolvimento:
+etapas de experimentacao e desenvolvimento. O fluxo segue uma progressao
+natural de validacao de comunicacao, leitura de botoes, consolidação de estado
+e, por fim, saida HID via Bluetooth:
 
 | Branch               | Objetivo                                                                                                                 |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -25,6 +27,7 @@ etapas de experimentacao e desenvolvimento:
 | `feature/esp-now`    | Experimentar e validar a comunicacao ESP-NOW entre os dois ESP32 com mensagens periodicas.                               |
 | `feature/left-node`  | Ler os primeiros botoes do no esquerdo e enviar eventos reais de pressionamento e soltura ao no direito.                 |
 | `feature/right-node` | Integrar as setas locais, uma fila FIFO central e o espelho consolidado das seis teclas no no direito.                   |
+| `feature/bluetooth`  | Adaptar a saida do no direito para anunciar um teclado BLE HID e enviar os eventos diretamente para o Linux.             |
 
 Para acessar uma etapa especifica, utilize:
 
